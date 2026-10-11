@@ -59,12 +59,12 @@ CREATE TABLE `doctor_slots` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `doctor_id` INT NOT NULL,
   `date` DATE NOT NULL,
+  `session_type` ENUM('Morning', 'Evening') NOT NULL DEFAULT 'Morning',
   `start_time` TIME NOT NULL,
   `end_time` TIME NOT NULL,
   `is_booked` BOOLEAN NOT NULL DEFAULT FALSE,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (`doctor_id`) REFERENCES `doctors` (`id`) ON DELETE CASCADE,
-  UNIQUE KEY `unique_doctor_datetime_slot` (`doctor_id`, `date`, `start_time`)
+  FOREIGN KEY (`doctor_id`) REFERENCES `doctors` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Create Appointments Table

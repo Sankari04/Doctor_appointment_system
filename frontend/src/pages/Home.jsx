@@ -69,7 +69,7 @@ const Home = () => {
               </div>
               <h3 className="text-lg font-bold text-slate-900">Instant Booking</h3>
               <p className="text-sm text-slate-600">
-                View real-time doctor availability calendars, select a date and time slot, and lock it instantly.
+                View doctor session availability, choose a date and morning or evening session, and receive a queue token.
               </p>
             </div>
 
@@ -112,5 +112,4 @@ const Home = () => {
 };
 
 export default Home;
-
 

@@ -145,13 +145,11 @@ async function seedDoctors() {
       );
       const doctorId = docResult.insertId;
 
-      // 2. Add availability slots for the next 4 days
-      const slotsToCreate = [];
-      const times = [
-        { start: '10:00:00', end: '10:30:00' },
-        { start: '11:00:00', end: '11:30:00' },
-        { start: '14:00:00', end: '14:30:00' },
-        { start: '15:30:00', end: '16:00:00' }
+      // 2. Add one consultation window per session for the next 4 days.
+      const sessionsToCreate = [];
+      const sessions = [
+        { type: 'Morning', start: '09:00:00', end: '12:00:00' },
+        { type: 'Evening', start: '18:00:00', end: '21:00:00' }
       ];
 
       for (let i = 0; i < 4; i++) {
@@ -159,16 +157,16 @@ async function seedDoctors() {
         dDate.setDate(dDate.getDate() + i);
         const dateStr = dDate.toISOString().split('T')[0];
 
-        times.forEach(t => {
-          slotsToCreate.push([doctorId, dateStr, t.start, t.end, 0]);
+        sessions.forEach(session => {
+          sessionsToCreate.push([doctorId, dateStr, session.type, session.start, session.end, 0]);
         });
       }
 
       await conn.query(
-        'INSERT IGNORE INTO doctor_slots (doctor_id, date, start_time, end_time, is_booked) VALUES ?',
-        [slotsToCreate]
+        'INSERT INTO doctor_slots (doctor_id, date, session_type, start_time, end_time, is_booked) VALUES ?',
+        [sessionsToCreate]
       );
-      console.log(`Seeded ${d.name} (${d.specialization}) with ${slotsToCreate.length} slots.`);
+      console.log(`Seeded ${d.name} (${d.specialization}) with ${sessionsToCreate.length} session availabilities.`);
     }
 
     await conn.commit();

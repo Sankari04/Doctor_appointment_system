@@ -13,7 +13,7 @@ const getPatientDashboard = async (req, res) => {
       `SELECT COUNT(*) as count 
        FROM appointments a
        JOIN doctor_slots s ON a.slot_id = s.id
-      WHERE a.patient_id = ? AND a.status IN ('booked', 'confirmed') AND (s.date > CURDATE() OR (s.date = CURDATE() AND s.start_time >= CURTIME()))`,
+      WHERE a.patient_id = ? AND a.status IN ('booked', 'confirmed') AND s.date >= CURDATE()`,
       [patientId]
     );
 
@@ -25,13 +25,15 @@ const getPatientDashboard = async (req, res) => {
 
     // Get 3 most recent appointments
     const [recentAppointments] = await pool.query(
-      `SELECT a.id, a.status, s.date, s.start_time, s.end_time, d.name as doctor_name, sp.name as specialization_name
+      `SELECT a.id, a.status, s.date, s.session_type, q.queue_number,
+              d.name as doctor_name, sp.name as specialization_name
        FROM appointments a
        JOIN doctor_slots s ON a.slot_id = s.id
        JOIN doctors d ON a.doctor_id = d.id
        JOIN specializations sp ON d.specialization_id = sp.id
+       LEFT JOIN appointment_queues q ON q.appointment_id = a.id
        WHERE a.patient_id = ?
-       ORDER BY s.date DESC, s.start_time DESC
+       ORDER BY s.date DESC, q.sequence_number DESC
        LIMIT 3`,
       [patientId]
     );
@@ -104,13 +106,14 @@ const getDoctorProfile = async (req, res) => {
       return res.status(404).json({ message: 'Doctor not found or not verified' });
     }
 
-    // Get available unbooked slots (only current/future dates, or today future times) - MySQL filtering
+    // Legacy appointment rows are grouped into the doctor's date/session availability.
     const [slots] = await pool.query(
-      `SELECT id, date, start_time, end_time 
+      `SELECT MIN(id) AS id, date, session_type, MIN(start_time) AS start_time, MAX(end_time) AS end_time
        FROM doctor_slots 
-       WHERE doctor_id = ? AND is_booked = false 
-         AND (date > CURDATE() OR (date = CURDATE() AND start_time >= CURTIME()))
-       ORDER BY date ASC, start_time ASC`,
+       WHERE doctor_id = ?
+       GROUP BY date, session_type
+       HAVING date > CURDATE() OR MAX(end_time) > CURTIME()
+       ORDER BY date ASC, session_type ASC`,
       [doctorId]
     );
 
@@ -128,49 +131,85 @@ const getDoctorProfile = async (req, res) => {
 // @route   POST /api/patients/appointments
 // @access  Private (Patient only)
 const bookAppointment = async (req, res) => {
-  const { doctor_id, slot_id } = req.body;
+  const { doctor_id, date, session_type } = req.body;
   const patientId = req.user.profileId;
 
-  if (!doctor_id || !slot_id) {
-    return res.status(400).json({ message: 'Please provide doctor_id and slot_id' });
+  if (!doctor_id || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) || !['Morning', 'Evening'].includes(session_type)) {
+    return res.status(400).json({ message: 'Please provide doctor_id, date, and a valid session_type' });
   }
 
   const conn = await pool.getConnection();
+  let transactionStarted = false;
 
   try {
     await conn.beginTransaction();
+    transactionStarted = true;
 
-    // Verify slot is available and belongs to doctor, locking the row to prevent concurrency issues
-    // SELECT without FOR UPDATE for compatibility with SQLite; transaction protects updates
+    // Serialize token assignment for this doctor so concurrent requests cannot share a token.
+    const [doctorRows] = await conn.query(
+      'SELECT id FROM doctors WHERE id = ? AND is_verified = true FOR UPDATE',
+      [doctor_id]
+    );
+    if (doctorRows.length === 0) {
+      await conn.rollback();
+      transactionStarted = false;
+      conn.release();
+      return res.status(404).json({ message: 'Doctor not found or not verified' });
+    }
+
     const [slotRows] = await conn.query(
-      'SELECT * FROM doctor_slots WHERE id = ? AND doctor_id = ? FOR UPDATE',
-      [slot_id, doctor_id]
+      `SELECT * FROM doctor_slots
+       WHERE doctor_id = ? AND date = ? AND session_type = ?
+        AND (date > CURDATE() OR (date = CURDATE() AND end_time > CURTIME()))
+       ORDER BY id ASC LIMIT 1 FOR UPDATE`,
+      [doctor_id, date, session_type]
     );
 
     if (slotRows.length === 0) {
+      await conn.rollback();
+      transactionStarted = false;
       conn.release();
-      return res.status(404).json({ message: 'Time slot not found' });
+      return res.status(404).json({ message: 'This doctor has no available session for the selected date' });
     }
 
     const slot = slotRows[0];
 
-    if (slot.is_booked) {
+    const [duplicateRows] = await conn.query(
+      `SELECT a.id
+       FROM appointments a
+       JOIN doctor_slots existing_session ON existing_session.id = a.slot_id
+       WHERE a.patient_id = ? AND a.doctor_id = ? AND existing_session.date = ?
+         AND existing_session.session_type = ? AND a.status IN ('booked', 'confirmed')
+       LIMIT 1`,
+      [patientId, doctor_id, date, session_type]
+    );
+    if (duplicateRows.length > 0) {
+      await conn.rollback();
+      transactionStarted = false;
       conn.release();
-      return res.status(400).json({ message: 'This slot is already booked by another patient' });
+      return res.status(409).json({ message: `You already have an active appointment with this doctor for the ${session_type} session on this date` });
     }
 
-    // Mark slot as booked
-    await conn.query(
-      'UPDATE doctor_slots SET is_booked = true WHERE id = ?',
-      [slot_id]
-    );
-
-    // Create appointment
     const [appointmentResult] = await conn.query(
       'INSERT INTO appointments (patient_id, doctor_id, slot_id, status) VALUES (?, ?, ?, ?)',
-      [patientId, doctor_id, slot_id, 'booked']
+      [patientId, doctor_id, slot.id, 'booked']
     );
     const newAppointmentId = appointmentResult.insertId;
+
+    const [seqResult] = await conn.query(
+      `SELECT COALESCE(MAX(sequence_number), 0) AS max_seq
+       FROM appointment_queues
+       WHERE doctor_id = ? AND date = ? AND session_type = ?`,
+      [doctor_id, date, session_type]
+    );
+    const nextSeq = Number(seqResult[0].max_seq || 0) + 1;
+
+    await conn.query(
+      `INSERT INTO appointment_queues
+       (appointment_id, doctor_id, patient_id, date, session_type, queue_number, sequence_number, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'Waiting')`,
+      [newAppointmentId, doctor_id, patientId, date, session_type, String(nextSeq), nextSeq]
+    );
 
     const [userRows] = await conn.query(
       `SELECT patient_user.id AS patient_user_id, doctor_user.id AS doctor_user_id, d.name AS doctor_name
@@ -182,29 +221,8 @@ const bookAppointment = async (req, res) => {
       [doctor_id, patientId]
     );
 
-    // Generate queue number for this doctor, date, and session (Morning vs Evening)
-    const slotDate = slot.date;
-    const startHour = parseInt(String(slot.start_time).split(':')[0], 10);
-    const sessionType = startHour < 12 ? 'Morning' : 'Evening';
-    const prefix = sessionType === 'Morning' ? 'M' : 'E';
-
-    const [seqResult] = await conn.query(
-      `SELECT COALESCE(MAX(sequence_number), 0) as max_seq 
-       FROM appointment_queues 
-       WHERE doctor_id = ? AND date = ? AND session_type = ?`,
-      [doctor_id, slotDate, sessionType]
-    );
-    const nextSeq = (seqResult[0].max_seq || 0) + 1;
-    const queueNumber = `${prefix}${String(nextSeq).padStart(2, '0')}`;
-
-    await conn.query(
-      `INSERT INTO appointment_queues 
-       (appointment_id, doctor_id, patient_id, date, session_type, queue_number, sequence_number, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'Waiting')`,
-      [newAppointmentId, doctor_id, patientId, slotDate, sessionType, queueNumber, nextSeq]
-    );
-
     await conn.commit();
+    transactionStarted = false;
     conn.release();
 
     if (userRows.length > 0) {
@@ -212,13 +230,13 @@ const bookAppointment = async (req, res) => {
         createNotification(
           userRows[0].patient_user_id,
           'Appointment Booked',
-          `Your appointment with Dr. ${userRows[0].doctor_name} is booked for ${slotDate} at ${String(slot.start_time).slice(0, 5)}.`,
+          `Your appointment with Dr. ${userRows[0].doctor_name} is booked for ${date} (${session_type} session). Your token number is ${nextSeq}.`,
           'appointment'
         ),
         createNotification(
           userRows[0].doctor_user_id,
           'New Appointment Request',
-          `A patient booked an appointment for ${slotDate} at ${String(slot.start_time).slice(0, 5)}. Please review and confirm it.`,
+          `A patient booked an appointment for ${date} (${session_type} session), token ${nextSeq}. Please review and confirm it.`,
           'appointment'
         )
       ]);
@@ -227,11 +245,14 @@ const bookAppointment = async (req, res) => {
     res.status(201).json({
       message: 'Appointment booked successfully',
       appointmentId: newAppointmentId,
-      queueNumber,
-      sessionType
+      doctorName: userRows[0]?.doctor_name,
+      date: String(slot.date).slice(0, 10),
+      sessionType: slot.session_type,
+      queueNumber: String(nextSeq),
+      status: 'booked'
     });
   } catch (error) {
-    await conn.rollback();
+    if (transactionStarted) await conn.rollback();
     conn.release();
     console.error('Book appointment error:', error);
     res.status(500).json({ message: 'Server error during booking' });
@@ -246,14 +267,16 @@ const getMyAppointments = async (req, res) => {
     const patientId = req.user.profileId;
 
     const [appointments] = await pool.query(
-      `SELECT a.id as appointment_id, a.status, a.notes, a.prescription, s.id as slot_id, s.date, s.start_time, s.end_time,
+      `SELECT a.id as appointment_id, a.status, a.notes, a.prescription, s.id as slot_id,
+              s.date, s.session_type, s.start_time, s.end_time, q.queue_number, q.status AS queue_status,
               d.name as doctor_name, d.phone as doctor_phone, sp.name as specialization_name
        FROM appointments a
        JOIN doctor_slots s ON a.slot_id = s.id
        JOIN doctors d ON a.doctor_id = d.id
        JOIN specializations sp ON d.specialization_id = sp.id
+       LEFT JOIN appointment_queues q ON q.appointment_id = a.id
        WHERE a.patient_id = ?
-       ORDER BY s.date DESC, s.start_time DESC`,
+       ORDER BY s.date DESC, q.sequence_number DESC`,
       [patientId]
     );
 
@@ -288,8 +311,7 @@ const cancelAppointment = async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    // Verify appointment belongs to patient and is currently booked
-    // SELECT without FOR UPDATE for SQLite compatibility; transaction will ensure consistency
+    // Verify appointment belongs to patient and is currently booked.
     const [appointmentRows] = await conn.query(
       'SELECT * FROM appointments WHERE id = ? AND patient_id = ? FOR UPDATE',
       [appointmentId, patientId]
@@ -319,16 +341,10 @@ const cancelAppointment = async (req, res) => {
       [appointmentId]
     );
 
-    // Release the slot
-    await conn.query(
-      'UPDATE doctor_slots SET is_booked = false WHERE id = ?',
-      [appointment.slot_id]
-    );
-
     await conn.commit();
     conn.release();
 
-    res.json({ message: 'Appointment cancelled successfully. Time slot is now available.' });
+    res.json({ message: 'Appointment cancelled successfully. The cancelled token remains in the queue history.' });
   } catch (error) {
     await conn.rollback();
     conn.release();

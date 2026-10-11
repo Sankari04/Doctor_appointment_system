@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../../context/AuthContext';
-import { Calendar, Clock, Plus, Trash2, AlertCircle, CheckCircle, HelpCircle } from 'lucide-react';
+import { Calendar, Clock, Plus, Trash2, AlertCircle, CheckCircle, Sun, Moon } from 'lucide-react';
 
 const ManageSlots = () => {
   const { api } = useContext(AuthContext);
@@ -10,12 +10,18 @@ const ManageSlots = () => {
   
   // Create Slot states
   const [slotDate, setSlotDate] = useState('');
+  const [sessionType, setSessionType] = useState('Morning');
   const [startTime, setStartTime] = useState('09:00');
-  const [endTime, setEndTime] = useState('09:30');
+  const [endTime, setEndTime] = useState('12:00');
   const [submitting, setSubmitting] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  useEffect(() => {
+    setStartTime(sessionType === 'Morning' ? '09:00' : '18:00');
+    setEndTime(sessionType === 'Morning' ? '12:00' : '21:00');
+  }, [sessionType]);
 
   // Fetch slots on load
   const fetchSlots = async () => {
@@ -46,26 +52,22 @@ const ManageSlots = () => {
     }
 
     if (startTime >= endTime) {
-      setErrorMsg('Start time must be earlier than the end time.');
+      setErrorMsg('Session start time must be earlier than its end time.');
       return;
     }
 
     setSubmitting(true);
     try {
-      // Bulk endpoint accepts arrays. Send a single slot as an array wrapper
       const payload = {
         date: slotDate,
-        slots: [{ start_time: `${startTime}:00`, end_time: `${endTime}:00` }]
+        session_type: sessionType,
+        start_time: `${startTime}:00`,
+        end_time: `${endTime}:00`
       };
       
-      const response = await api.post('/doctors/slots', payload);
-      
-      if (response.data.addedCount === 0) {
-        setErrorMsg('Slot already exists at this date and start time.');
-      } else {
-        setSuccessMsg(`Slot added successfully.`);
-        fetchSlots(); // Refresh slot list
-      }
+      await api.post('/doctors/slots', payload);
+      setSuccessMsg(`${sessionType} session added successfully.`);
+      fetchSlots();
     } catch (err) {
       console.error('Error creating slot:', err);
       setErrorMsg(err.response?.data?.message || 'Failed to create slot.');
@@ -80,7 +82,7 @@ const ManageSlots = () => {
     setSuccessMsg('');
     try {
       await api.delete(`/doctors/slots/${slotId}`);
-      setSuccessMsg('Time slot deleted.');
+      setSuccessMsg('Session availability deleted.');
       fetchSlots(); // Refresh slot list
     } catch (err) {
       console.error('Error deleting slot:', err);
@@ -92,7 +94,7 @@ const ManageSlots = () => {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
       <div>
         <h1 className="text-3xl font-extrabold text-white">Manage Availability</h1>
-        <p className="text-sm text-slate-600 mt-1">Configure dates and hour slots for patient bookings</p>
+        <p className="text-sm text-slate-600 mt-1">Configure consultation windows. Patients receive tokens, not individual times.</p>
       </div>
 
       {errorMsg && (
@@ -113,7 +115,7 @@ const ManageSlots = () => {
         {/* Slot Creation Form */}
         <div className="glass-card p-6 h-fit space-y-6">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            Create Available Slot
+            Create Session Availability
           </h2>
 
           <form onSubmit={handleAddSlot} className="space-y-4">
@@ -129,6 +131,18 @@ const ManageSlots = () => {
                 onChange={(e) => setSlotDate(e.target.value)}
                 className="custom-input w-full"
               />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-slate-700">Consultation Session</label>
+              <select
+                value={sessionType}
+                onChange={(e) => setSessionType(e.target.value)}
+                className="custom-input w-full"
+              >
+                <option value="Morning">Morning</option>
+                <option value="Evening">Evening</option>
+              </select>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -168,7 +182,7 @@ const ManageSlots = () => {
                 <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
               ) : (
                 <>
-                  <Plus size={18} /> Add Time Slot
+                  <Plus size={18} /> Add Session
                 </>
               )}
             </button>
@@ -178,7 +192,7 @@ const ManageSlots = () => {
         {/* Existing Slots List */}
         <div className="glass-card p-6 lg:col-span-2 space-y-6">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            My Availability Calendar
+            My Session Availability
           </h2>
 
           {loading ? (
@@ -211,36 +225,26 @@ const ManageSlots = () => {
                     <div className="space-y-1">
                       <span className="text-sm font-extrabold text-white">{dateStr}</span>
                       <div className="text-xs text-slate-600 flex items-center gap-1.5">
-                        <Clock size={12} className="text-slate-500" />
-                        <span>Hours: {startStr} - {endStr}</span>
+                        {slot.session_type === 'Morning' ? <Sun size={12} /> : <Moon size={12} />}
+                        <span>{slot.session_type} session: {startStr} - {endStr}</span>
                       </div>
                     </div>
 
                     <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto">
                       <span
-                        className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
-                          slot.is_booked
-                            ? 'bg-accent-950/30 border-accent-900 text-accent-400'
-                            : 'bg-slate-100/40 border-slate-200 text-slate-600'
-                        }`}
+                        className="text-xs font-semibold px-2.5 py-0.5 rounded-full border bg-emerald-50 border-emerald-200 text-emerald-700"
                       >
-                        {slot.is_booked ? 'Booked' : 'Available'}
+                        Session open
                       </span>
 
-                      {!slot.is_booked ? (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteSlot(slot.id)}
-                          className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/20 rounded-lg transition-colors border border-transparent hover:border-rose-900/30"
-                          title="Delete Slot"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      ) : (
-                        <div className="w-8 h-8 flex items-center justify-center" title="Booked slots cannot be deleted">
-                          <HelpCircle size={16} className="text-slate-600 cursor-help" />
-                        </div>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSlot(slot.id)}
+                        className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/20 rounded-lg transition-colors border border-transparent hover:border-rose-900/30"
+                        title="Delete Session"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   </div>
                 );
@@ -254,5 +258,3 @@ const ManageSlots = () => {
 };
 
 export default ManageSlots;
-
-

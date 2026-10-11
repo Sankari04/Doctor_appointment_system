@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../../context/AuthContext';
-import { Calendar, Clock, Phone, User, AlertCircle, RefreshCw } from 'lucide-react';
+import { Calendar, Clock, Phone, AlertCircle, RefreshCw } from 'lucide-react';
 
 const formatDisplayDate = (dateInput) => {
   if (!dateInput) return 'N/A';
@@ -183,7 +183,7 @@ const DoctorAppointments = () => {
                         </div>
                         <div className="flex items-center gap-2">
                           <Clock size={14} className="text-slate-500" />
-                          <span>{app.start_time.substring(0, 5)} - {app.end_time.substring(0, 5)}</span>
+                          <span>{app.session_type} session · Token #{app.queue_number || '—'}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <Phone size={14} className="text-slate-500" />
@@ -241,7 +241,7 @@ const DoctorAppointments = () => {
                       </div>
                       <div className="text-xs text-slate-500 space-y-1 pt-1">
                         <p>Date: {formatDisplayDate(app.date)}</p>
-                        <p>Time: {app.start_time.substring(0, 5)} - {app.end_time.substring(0, 5)}</p>
+                        <p>{app.session_type} session · Token #{app.queue_number || '—'}</p>
                       </div>
 
                       {(app.notes || app.prescription) && (
@@ -356,5 +356,3 @@ const DoctorAppointments = () => {
 };
 
 export default DoctorAppointments;
-
-

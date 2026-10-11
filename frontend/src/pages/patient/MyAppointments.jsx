@@ -20,11 +20,10 @@ const formatDisplayDate = (dateInput) => {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
-const getAppointmentDateTime = (app) => {
+const getAppointmentDate = (app) => {
   const date = app.date instanceof Date ? app.date.toISOString().slice(0, 10) : String(app.date || '').slice(0, 10);
-  const time = String(app.start_time || '').slice(0, 8);
-  const dateTime = new Date(`${date}T${time}`);
-  return Number.isNaN(dateTime.getTime()) ? null : dateTime;
+  const appointmentDate = new Date(`${date}T00:00:00`);
+  return Number.isNaN(appointmentDate.getTime()) ? null : appointmentDate;
 };
 
 const MyAppointments = () => {
@@ -85,13 +84,17 @@ const MyAppointments = () => {
   };
 
   const upcoming = appointments.filter(app => {
-    const appointmentDateTime = getAppointmentDateTime(app);
-    return ['booked', 'confirmed'].includes(app.status) && appointmentDateTime && appointmentDateTime >= new Date();
+    const appointmentDate = getAppointmentDate(app);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return ['booked', 'confirmed'].includes(app.status) && appointmentDate && appointmentDate >= today;
   });
 
   const past = appointments.filter(app => {
-    const appointmentDateTime = getAppointmentDateTime(app);
-    return !['booked', 'confirmed'].includes(app.status) || !appointmentDateTime || appointmentDateTime < new Date();
+    const appointmentDate = getAppointmentDate(app);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return !['booked', 'confirmed'].includes(app.status) || !appointmentDate || appointmentDate < today;
   });
 
   return (
@@ -160,7 +163,7 @@ const MyAppointments = () => {
                         </div>
                         <div className="flex items-center gap-2">
                           <Clock size={14} className="text-slate-500" />
-                          <span>{app.start_time.substring(0, 5)} - {app.end_time.substring(0, 5)}</span>
+                          <span>{app.session_type} session · Token #{app.queue_number || '—'}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <Phone size={14} className="text-slate-500" />
@@ -211,7 +214,7 @@ const MyAppointments = () => {
                       </div>
                       <div className="text-xs text-slate-500 space-y-1 pt-1">
                         <p>Date: {formatDisplayDate(app.date)}</p>
-                        <p>Time: {app.start_time.substring(0, 5)} - {app.end_time.substring(0, 5)}</p>
+                        <p>{app.session_type} session · Token #{app.queue_number || '—'}</p>
                       </div>
                     </div>
 
@@ -305,5 +308,4 @@ const MyAppointments = () => {
 };
 
 export default MyAppointments;
-
 

@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useContext } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { AuthContext } from '../../context/AuthContext';
-import { CheckCircle2, AlertCircle, ArrowLeft, Calendar, Clock, DollarSign, ShieldAlert } from 'lucide-react';
+import { CheckCircle2, ArrowLeft, Calendar, Clock, DollarSign, ShieldAlert } from 'lucide-react';
 
 const formatCurrencyINR = (amount) => {
   const value = Number(amount ?? 0);
@@ -28,21 +28,23 @@ const formatDisplayDate = (dateInput) => {
 const BookingConfirmation = () => {
   const [searchParams] = useSearchParams();
   const doctorId = searchParams.get('doctor_id');
-  const slotId = searchParams.get('slot_id');
+  const selectedDate = searchParams.get('date');
+  const sessionType = searchParams.get('session_type');
 
   const { api, user } = useContext(AuthContext);
   const navigate = useNavigate();
 
   const [doctor, setDoctor] = useState(null);
-  const [slot, setSlot] = useState(null);
+  const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [booking, setBooking] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [bookingResult, setBookingResult] = useState(null);
 
   useEffect(() => {
     const fetchConfirmDetails = async () => {
-      if (!doctorId || !slotId) {
+      if (!doctorId || !selectedDate || !sessionType) {
         setError('Missing booking details.');
         setLoading(false);
         return;
@@ -53,16 +55,14 @@ const BookingConfirmation = () => {
         const response = await api.get(`/patients/doctors/${doctorId}`);
         setDoctor(response.data.doctor);
 
-        // Find the specific slot in the slot array
-        const selectedSlot = response.data.slots.find(s => s.id === parseInt(slotId, 10));
-        
-        // Note: if the slot was booked just now, it might not be in the available slots array.
-        // We will make sure to check if it's there.
-        if (selectedSlot) {
-          setSlot(selectedSlot);
+        const selectedSession = response.data.slots.find(
+          item => String(item.date).slice(0, 10) === selectedDate && item.session_type === sessionType
+        );
+
+        if (selectedSession) {
+          setSession(selectedSession);
         } else {
-          // If not in available slots, it might be booked or invalid
-          setError('Selected time slot is no longer available.');
+          setError('The selected session is no longer available.');
         }
       } catch (err) {
         console.error('Error fetching confirmation details:', err);
@@ -73,20 +73,19 @@ const BookingConfirmation = () => {
     };
 
     fetchConfirmDetails();
-  }, [doctorId, slotId]);
+  }, [doctorId, selectedDate, sessionType]);
 
   const handleConfirm = async () => {
     setBooking(true);
     setError('');
     try {
-      await api.post('/patients/appointments', {
+      const response = await api.post('/patients/appointments', {
         doctor_id: parseInt(doctorId, 10),
-        slot_id: parseInt(slotId, 10)
+        date: selectedDate,
+        session_type: sessionType
       });
+      setBookingResult(response.data);
       setSuccess(true);
-      setTimeout(() => {
-        navigate('/patient/appointments');
-      }, 2000);
     } catch (err) {
       console.error('Booking failed:', err);
       setError(err.response?.data?.message || 'Booking failed. The slot may have been taken.');
@@ -125,16 +124,23 @@ const BookingConfirmation = () => {
               <CheckCircle2 size={44} className="animate-pulse" />
             </div>
             <h2 className="text-2xl font-extrabold text-slate-900">Booking Confirmed!</h2>
-            <p className="text-slate-600 text-sm leading-relaxed max-w-xs mx-auto">
-              Your appointment with <span className="text-slate-900 font-bold">{doctor.name}</span> has been locked in. Redirecting to your schedule...
-            </p>
+            <div className="mx-auto max-w-xs space-y-2 text-sm text-slate-600">
+              <p>Doctor: <strong className="text-slate-900">{bookingResult?.doctorName || doctor.name}</strong></p>
+              <p>Date: <strong className="text-slate-900">{formatDisplayDate(bookingResult?.date || selectedDate)}</strong></p>
+              <p>Session: <strong className="text-slate-900">{bookingResult?.sessionType || sessionType}</strong></p>
+              <p>Token: <strong className="text-violet-700">#{bookingResult?.queueNumber}</strong></p>
+              <p>Status: <strong className="text-slate-900">{bookingResult?.status}</strong></p>
+            </div>
+            <button onClick={() => navigate('/patient/appointments')} className="btn-primary w-full">
+              View My Appointments
+            </button>
           </div>
         ) : (
           <>
             <div>
               <h2 className="text-2xl font-extrabold text-slate-900">Confirm Booking</h2>
               <p className="mt-2 text-sm text-slate-600">
-                Please review your slot details before finalizing
+                Please review the consultation session before finalizing
               </p>
             </div>
 
@@ -150,11 +156,11 @@ const BookingConfirmation = () => {
                 <div className="pt-2 border-t border-slate-200/60 text-xs text-slate-600 space-y-2">
                   <div className="flex items-center gap-2">
                     <Calendar size={14} className="text-slate-500" />
-                    <span>{formatDisplayDate(slot.date)}</span>
+                    <span>{formatDisplayDate(session.date)}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Clock size={14} className="text-slate-500" />
-                    <span>{slot.start_time.substring(0, 5)} - {slot.end_time.substring(0, 5)}</span>
+                    <span>{sessionType} session</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <DollarSign size={14} className="text-slate-500" />
@@ -186,7 +192,7 @@ const BookingConfirmation = () => {
                 disabled={booking}
                 className="btn-secondary w-full text-xs"
               >
-                Change Time Slot
+                Change Session
               </button>
             </div>
           </>
@@ -197,5 +203,3 @@ const BookingConfirmation = () => {
 };
 
 export default BookingConfirmation;
-
-

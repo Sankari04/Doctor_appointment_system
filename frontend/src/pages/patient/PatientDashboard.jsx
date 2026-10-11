@@ -268,7 +268,7 @@ const PatientDashboard = () => {
                   <div className="text-xs text-slate-600 pt-1">
                     <span>Date: {formatDisplayDate(app.date)}</span>
                     <span className="mx-2">|</span>
-                    <span>Time: {app.start_time.substring(0, 5)} - {app.end_time.substring(0, 5)}</span>
+                    <span>{app.session_type} session · Token #{app.queue_number || '—'}</span>
                   </div>
                 </div>
 
@@ -304,5 +304,4 @@ const PatientDashboard = () => {
 };
 
 export default PatientDashboard;
-
 

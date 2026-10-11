@@ -73,7 +73,9 @@ const SlotSelection = () => {
 
   const handleProceed = () => {
     if (!selectedSlotId) return;
-    navigate(`/patient/booking-confirmation?doctor_id=${doctor.id}&slot_id=${selectedSlotId}`);
+    const selectedSession = slotsForSelectedDate.find(session => session.id === selectedSlotId);
+    if (!selectedSession) return;
+    navigate(`/patient/booking-confirmation?doctor_id=${doctor.id}&date=${selectedSession.date}&session_type=${selectedSession.session_type}`);
   };
 
   if (loading) {
@@ -106,7 +108,7 @@ const SlotSelection = () => {
           <span className="text-xs font-extrabold text-primary-400 uppercase tracking-widest flex items-center gap-1">
             <Sparkles size={12} /> Appointment Booking
           </span>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1">Select Date & Time Slot</h1>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1">Select Date & Consultation Session</h1>
           <p className="text-sm text-slate-600">Booking session with {doctor.name} ({doctor.specialization_name})</p>
         </div>
 
@@ -115,7 +117,7 @@ const SlotSelection = () => {
             <AlertCircle className="mx-auto h-12 w-12 text-amber-500 mb-4" />
             <h3 className="text-lg font-bold text-white">No Slots Available</h3>
             <p className="text-slate-600 text-sm mt-1 max-w-sm mx-auto">
-              This doctor has not added any upcoming slots. Please check back later or contact support.
+              This doctor has not added any upcoming session availability. Please check back later.
             </p>
           </div>
         ) : (
@@ -158,10 +160,10 @@ const SlotSelection = () => {
               </div>
             </div>
 
-            {/* Time Slots grid */}
+            {/* Available consultation sessions */}
             <div className="space-y-3">
               <label className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
-                <Clock size={14} /> 2. Select Time
+                <Clock size={14} /> 2. Select Session
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {slotsForSelectedDate.map(slot => {
@@ -179,7 +181,7 @@ const SlotSelection = () => {
                           : 'bg-violet-50 border-slate-200 text-slate-700 hover:border-slate-200'
                       }`}
                     >
-                      {startStr} - {endStr}
+                      {slot.session_type} · {startStr} - {endStr}
                     </button>
                   );
                 })}
@@ -191,13 +193,13 @@ const SlotSelection = () => {
               <div className="text-slate-600 text-xs text-center sm:text-left">
                 {selectedSlotId ? (
                   <p>
-                    Selected: <span className="text-slate-900 font-bold">{formatDisplayDate(selectedDate)}</span> at{' '}
+                    Selected: <span className="text-slate-900 font-bold">{formatDisplayDate(selectedDate)}</span> ·{' '}
                     <span className="text-slate-900 font-bold">
-                      {slots.find(s => s.id === selectedSlotId)?.start_time.substring(0, 5)}
+                      {slotsForSelectedDate.find(session => session.id === selectedSlotId)?.session_type} session
                     </span>
                   </p>
                 ) : (
-                  <p>Please select a date and time slot to proceed.</p>
+                  <p>Please select a date and consultation session to proceed.</p>
                 )}
               </div>
 
@@ -218,5 +220,3 @@ const SlotSelection = () => {
 };
 
 export default SlotSelection;
-
-

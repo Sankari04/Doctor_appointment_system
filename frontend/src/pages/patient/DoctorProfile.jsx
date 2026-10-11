@@ -109,7 +109,7 @@ const DoctorProfile = () => {
             onClick={() => navigate(`/patient/doctor/${doctor.id}/slots`)}
             className="btn-primary w-full sm:w-auto flex items-center justify-center gap-2"
           >
-            <CalendarDays size={18} /> Select Date & Time Slot <ArrowRight size={16} />
+            <CalendarDays size={18} /> Select Date & Session <ArrowRight size={16} />
           </button>
         </div>
       </div>
@@ -118,5 +118,4 @@ const DoctorProfile = () => {
 };
 
 export default DoctorProfile;
-
 

@@ -83,7 +83,7 @@ const DoctorQueue = () => {
   const getStatusBadge = (status) => {
     switch (status) {
       case 'Consulting':
-        return <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider animate-pulse flex items-center gap-1"><Play size={12} /> Consulting</span>;
+        return <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider animate-pulse flex items-center gap-1"><Play size={12} /> In Consultation</span>;
       case 'Waiting':
         return <span className="bg-amber-100 text-amber-800 border border-amber-300 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-1"><Clock size={12} /> Waiting</span>;
       case 'Completed':
@@ -188,7 +188,7 @@ const DoctorQueue = () => {
                 <h2 className="text-2xl font-extrabold text-slate-900">{currentlyConsulting.patient_name}</h2>
               </div>
               <p className="text-xs text-slate-600 mt-1">
-                Gender: {currentlyConsulting.patient_gender || 'N/A'} | Phone: {currentlyConsulting.patient_phone} | Slot: {currentlyConsulting.start_time?.substring(0, 5)} - {currentlyConsulting.end_time?.substring(0, 5)}
+                Gender: {currentlyConsulting.patient_gender || 'N/A'} | Phone: {currentlyConsulting.patient_phone} | Session: {currentlyConsulting.session_type}
               </p>
             </div>
           ) : (
@@ -282,7 +282,7 @@ const DoctorQueue = () => {
                   <th className="p-4">Session Token</th>
                   <th className="p-4">Patient Name</th>
                   <th className="p-4">Contact Phone</th>
-                  <th className="p-4">Slot Time</th>
+                  <th className="p-4">Session</th>
                   <th className="p-4">Status</th>
                   <th className="p-4 text-center">Manage Token</th>
                 </tr>
@@ -296,20 +296,29 @@ const DoctorQueue = () => {
                       <div className="text-xs text-slate-500">Gender: {item.patient_gender || 'N/A'}</div>
                     </td>
                     <td className="p-4 text-slate-700">{item.patient_phone}</td>
-                    <td className="p-4 text-slate-700">{item.start_time?.substring(0, 5)} - {item.end_time?.substring(0, 5)}</td>
+                    <td className="p-4 text-slate-700">{item.session_type}</td>
                     <td className="p-4">{getStatusBadge(item.queue_status)}</td>
                     <td className="p-4 text-center">
                       <div className="flex justify-center items-center gap-2">
-                        {item.queue_status !== 'Consulting' && (
+                        {item.queue_status === 'Consulting' && (
                           <button
-                            onClick={() => handleUpdateStatus(item.queue_id, 'Consulting')}
+                            onClick={() => handleUpdateStatus(item.queue_id, 'Waiting')}
+                            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"
+                            title="Return patient to waiting"
+                          >
+                            <Clock size={11} /> Waiting
+                          </button>
+                        )}
+                        {item.queue_status === 'Waiting' && (
+                          <button
+                            onClick={() => handleUpdateStatus(item.queue_id, 'In Consultation')}
                             className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"
                             title="Call this patient into consultation"
                           >
                             <Play size={11} /> Call
                           </button>
                         )}
-                        {item.queue_status !== 'Completed' && (
+                        {['Waiting', 'Consulting'].includes(item.queue_status) && (
                           <button
                             onClick={() => handleUpdateStatus(item.queue_id, 'Completed')}
                             className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"
@@ -318,7 +327,7 @@ const DoctorQueue = () => {
                             <CheckCircle2 size={11} /> Complete
                           </button>
                         )}
-                        {item.queue_status !== 'Cancelled' && (
+                        {['Waiting', 'Consulting'].includes(item.queue_status) && (
                           <button
                             onClick={() => handleUpdateStatus(item.queue_id, 'Cancelled')}
                             className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"

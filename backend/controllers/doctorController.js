@@ -22,24 +22,26 @@ const getDoctorDashboard = async (req, res) => {
       `SELECT COUNT(*) as count 
        FROM appointments a
        JOIN doctor_slots s ON a.slot_id = s.id
-      WHERE a.doctor_id = ? AND a.status IN ('booked', 'confirmed') AND (s.date > CURDATE() OR (s.date = CURDATE() AND s.start_time >= CURTIME()))`,
+      WHERE a.doctor_id = ? AND a.status IN ('booked', 'confirmed') AND s.date >= CURDATE()`,
       [doctorId]
     );
 
     // Count total slots created
     const [totalSlots] = await pool.query(
-      'SELECT COUNT(*) as count FROM doctor_slots WHERE doctor_id = ?',
+      'SELECT COUNT(DISTINCT date, session_type) as count FROM doctor_slots WHERE doctor_id = ?',
       [doctorId]
     );
 
     // Get 3 upcoming appointments
     const [recentAppointments] = await pool.query(
-      `SELECT a.id as appointment_id, a.status, s.date, s.start_time, s.end_time, p.name as patient_name, p.phone as patient_phone
+      `SELECT a.id as appointment_id, a.status, s.date, s.session_type, s.start_time, s.end_time,
+              q.queue_number, p.name as patient_name, p.phone as patient_phone
        FROM appointments a
        JOIN doctor_slots s ON a.slot_id = s.id
        JOIN patients p ON a.patient_id = p.id
-      WHERE a.doctor_id = ? AND a.status IN ('booked', 'confirmed') AND (s.date > CURDATE() OR (s.date = CURDATE() AND s.start_time >= CURTIME()))
-       ORDER BY s.date ASC, s.start_time ASC
+       LEFT JOIN appointment_queues q ON q.appointment_id = a.id
+      WHERE a.doctor_id = ? AND a.status IN ('booked', 'confirmed') AND s.date >= CURDATE()
+       ORDER BY s.date ASC, q.sequence_number ASC
        LIMIT 3`,
       [doctorId]
     );
@@ -119,10 +121,12 @@ const getDoctorSlots = async (req, res) => {
     const doctorId = req.user.profileId;
 
     const [slots] = await pool.query(
-      `SELECT id, date, start_time, end_time, is_booked 
-       FROM doctor_slots 
+      `SELECT MIN(id) AS id, date, session_type, MIN(start_time) AS start_time,
+              MAX(end_time) AS end_time, MAX(is_booked) AS is_booked
+       FROM doctor_slots
        WHERE doctor_id = ?
-       ORDER BY date DESC, start_time ASC`,
+       GROUP BY date, session_type
+       ORDER BY date DESC, session_type ASC`,
       [doctorId]
     );
 
@@ -133,40 +137,59 @@ const getDoctorSlots = async (req, res) => {
   }
 };
 
-// @desc    Add available time slots (bulk support)
+// @desc    Add a doctor's date and session availability
 // @route   POST /api/doctors/slots
 // @access  Private (Doctor only)
 const addDoctorSlots = async (req, res) => {
   const doctorId = req.user.profileId;
-  const { date, slots } = req.body; // slots is array of { start_time, end_time }
+  const { date, session_type, start_time, end_time } = req.body;
 
-  if (!date || !slots || !Array.isArray(slots) || slots.length === 0) {
-    return res.status(400).json({ message: 'Please provide a date and a list of slots containing start_time and end_time' });
+  if (!date || !['Morning', 'Evening'].includes(session_type) || !start_time || !end_time) {
+    return res.status(400).json({ message: 'Please provide a date, session_type, start_time, and end_time' });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || start_time >= end_time) {
+    return res.status(400).json({ message: 'Provide a valid date and ensure session start time is earlier than its end time' });
   }
 
+  let conn;
+  let transactionStarted = false;
   try {
-    const values = [];
-    slots.forEach(slot => {
-      if (slot.start_time && slot.end_time) {
-        values.push([doctorId, date, slot.start_time, slot.end_time, false]);
-      }
-    });
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    transactionStarted = true;
+    await conn.query('SELECT id FROM doctors WHERE id = ? FOR UPDATE', [doctorId]);
 
-    if (values.length === 0) {
-      return res.status(400).json({ message: 'No valid slots provided' });
+    const [existing] = await conn.query(
+      'SELECT id FROM doctor_slots WHERE doctor_id = ? AND date = ? AND session_type = ? LIMIT 1',
+      [doctorId, date, session_type]
+    );
+    if (existing.length > 0) {
+      await conn.rollback();
+      transactionStarted = false;
+      conn.release();
+      conn = null;
+      return res.status(409).json({ message: `${session_type} availability already exists for this date` });
     }
 
-    // Insert slots, ignore duplicate slots based on unique key (bulk insert for MySQL)
-    const [result] = await pool.query(
-      'INSERT IGNORE INTO doctor_slots (doctor_id, date, start_time, end_time, is_booked) VALUES ?',
-      [values]
+    const [result] = await conn.query(
+      `INSERT INTO doctor_slots (doctor_id, date, session_type, start_time, end_time, is_booked)
+       VALUES (?, ?, ?, ?, ?, false)`,
+      [doctorId, date, session_type, start_time, end_time]
     );
+    await conn.commit();
+    transactionStarted = false;
+    conn.release();
+    conn = null;
 
     res.status(201).json({
-      message: `Slots updated successfully. Added ${result.affectedRows} new slots.`,
+      message: `${session_type} availability added successfully.`,
       addedCount: result.affectedRows
     });
   } catch (error) {
+    if (conn) {
+      if (transactionStarted) await conn.rollback();
+      conn.release();
+    }
     console.error('Add doctor slots error:', error);
     res.status(500).json({ message: 'Server error adding slots. Double check time formatting.' });
   }
@@ -180,9 +203,9 @@ const deleteDoctorSlot = async (req, res) => {
   const doctorId = req.user.profileId;
 
   try {
-    // Verify slot belongs to doctor and is not booked
+    // Verify the session belongs to this doctor and has no appointment history.
     const [slotRows] = await pool.query(
-      'SELECT is_booked FROM doctor_slots WHERE id = ? AND doctor_id = ?',
+      'SELECT date, session_type FROM doctor_slots WHERE id = ? AND doctor_id = ?',
       [slotId, doctorId]
     );
 
@@ -190,12 +213,20 @@ const deleteDoctorSlot = async (req, res) => {
       return res.status(404).json({ message: 'Time slot not found' });
     }
 
-    if (slotRows[0].is_booked) {
-      return res.status(400).json({ message: 'Cannot delete slot. It has already been booked by a patient.' });
+    const [appointments] = await pool.query(
+      `SELECT a.id FROM appointments a
+       JOIN doctor_slots s ON s.id = a.slot_id
+       WHERE s.doctor_id = ? AND s.date = ? AND s.session_type = ? LIMIT 1`,
+      [doctorId, slotRows[0].date, slotRows[0].session_type]
+    );
+    if (appointments.length > 0) {
+      return res.status(400).json({ message: 'Cannot delete a session with appointment history. Cancel appointments instead.' });
     }
 
-    // Delete the slot
-    await pool.query('DELETE FROM doctor_slots WHERE id = ?', [slotId]);
+    await pool.query(
+      'DELETE FROM doctor_slots WHERE doctor_id = ? AND date = ? AND session_type = ?',
+      [doctorId, slotRows[0].date, slotRows[0].session_type]
+    );
 
     res.json({ message: 'Time slot deleted successfully' });
   } catch (error) {
@@ -212,13 +243,15 @@ const getBookedAppointments = async (req, res) => {
     const doctorId = req.user.profileId;
 
     const [appointments] = await pool.query(
-      `SELECT a.id as appointment_id, a.status, a.notes, a.prescription, s.date, s.start_time, s.end_time,
+      `SELECT a.id as appointment_id, a.status, a.notes, a.prescription, s.date, s.session_type,
+              s.start_time, s.end_time, q.queue_number, q.status AS queue_status,
               p.name as patient_name, p.phone as patient_phone, p.gender as patient_gender, p.dob as patient_dob
        FROM appointments a
        JOIN doctor_slots s ON a.slot_id = s.id
        JOIN patients p ON a.patient_id = p.id
+       LEFT JOIN appointment_queues q ON q.appointment_id = a.id
        WHERE a.doctor_id = ?
-       ORDER BY s.date DESC, s.start_time DESC`,
+       ORDER BY s.date DESC, q.sequence_number DESC`,
       [doctorId]
     );
 

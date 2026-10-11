@@ -1,10 +1,11 @@
 const pool = require('../config/db');
 
-// Helper to ensure all appointments have a queue record with proper session_type
+// Preserve queue entries for appointments created before queue records were introduced.
 const syncMissingQueues = async (connOrPool = pool) => {
   try {
     const [missingAppointments] = await connOrPool.query(
-      `SELECT a.id as appointment_id, a.patient_id, a.doctor_id, a.status as app_status, s.date, s.start_time
+      `SELECT a.id as appointment_id, a.patient_id, a.doctor_id, a.status as app_status,
+              s.date, s.session_type
        FROM appointments a
        JOIN doctor_slots s ON a.slot_id = s.id
        LEFT JOIN appointment_queues q ON a.id = q.appointment_id
@@ -13,25 +14,20 @@ const syncMissingQueues = async (connOrPool = pool) => {
     );
 
     for (const app of missingAppointments) {
-      const startHour = parseInt(String(app.start_time).split(':')[0], 10);
-      const sessionType = startHour < 12 ? 'Morning' : 'Evening';
-      const prefix = sessionType === 'Morning' ? 'M' : 'E';
-
       const [seqResult] = await connOrPool.query(
         `SELECT COALESCE(MAX(sequence_number), 0) as max_seq 
          FROM appointment_queues 
          WHERE doctor_id = ? AND date = ? AND session_type = ?`,
-        [app.doctor_id, app.date, sessionType]
+        [app.doctor_id, app.date, app.session_type]
       );
       const nextSeq = (seqResult[0].max_seq || 0) + 1;
-      const queueNumber = `${prefix}${String(nextSeq).padStart(2, '0')}`;
       const queueStatus = app.app_status === 'cancelled' ? 'Cancelled' : (app.app_status === 'completed' ? 'Completed' : 'Waiting');
 
       await connOrPool.query(
         `INSERT IGNORE INTO appointment_queues 
          (appointment_id, doctor_id, patient_id, date, session_type, queue_number, sequence_number, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [app.appointment_id, app.doctor_id, app.patient_id, app.date, sessionType, queueNumber, nextSeq, queueStatus]
+        [app.appointment_id, app.doctor_id, app.patient_id, app.date, app.session_type, String(nextSeq), nextSeq, queueStatus]
       );
     }
   } catch (err) {
@@ -86,13 +82,11 @@ const getPatientQueueStatus = async (req, res) => {
           [item.doctor_id, item.date, item.session_type, item.sequence_number]
         );
         const patientsAhead = aheadResult[0].ahead_count || 0;
-        const estimatedWaitTimeMins = item.queue_status === 'Waiting' ? patientsAhead * 15 : 0;
-
         return {
           ...item,
           currentConsultingQueueNumber,
           patientsAhead,
-          estimatedWaitTimeMins
+          estimatedWaitTimeMins: null
         };
       })
     );
@@ -172,39 +166,45 @@ const callNextPatient = async (req, res) => {
   const sessionType = req.body.session_type || (currentHour < 13 ? 'Morning' : 'Evening');
 
   const conn = await pool.getConnection();
+  let transactionStarted = false;
 
   try {
     await conn.beginTransaction();
+    transactionStarted = true;
+    await conn.query(
+      'SELECT id FROM doctors WHERE id = ? FOR UPDATE',
+      [doctorId]
+    );
     await syncMissingQueues(conn);
 
-    // 1. Mark currently 'Consulting' patient in this session as 'Completed'
-    await conn.query(
-      `UPDATE appointment_queues 
-       SET status = 'Completed' 
-       WHERE doctor_id = ? AND date = ? AND session_type = ? AND status = 'Consulting'`,
+    const [consultingRows] = await conn.query(
+      `SELECT queue_number FROM appointment_queues
+       WHERE doctor_id = ? AND date = ? AND session_type = ? AND status = 'Consulting'
+       LIMIT 1`,
       [doctorId, requestedDate, sessionType]
     );
-    await conn.query(
-      `UPDATE appointments a
-       JOIN appointment_queues q ON a.id = q.appointment_id
-       SET a.status = 'completed'
-       WHERE q.doctor_id = ? AND q.date = ? AND q.session_type = ? AND q.status = 'Completed'`,
-      [doctorId, requestedDate, sessionType]
-    );
+    if (consultingRows.length > 0) {
+      await conn.rollback();
+      transactionStarted = false;
+      conn.release();
+      return res.status(409).json({
+        message: `Token ${consultingRows[0].queue_number} is still in consultation. Mark it Completed before calling the next patient.`
+      });
+    }
 
-    // 2. Find next patient with status 'Waiting' in this session
     const [nextRows] = await conn.query(
       `SELECT q.id, q.appointment_id, q.queue_number, q.session_type, p.name as patient_name
        FROM appointment_queues q
        JOIN patients p ON q.patient_id = p.id
        WHERE q.doctor_id = ? AND q.date = ? AND q.session_type = ? AND q.status = 'Waiting'
        ORDER BY q.sequence_number ASC
-       LIMIT 1`,
+       LIMIT 1 FOR UPDATE`,
       [doctorId, requestedDate, sessionType]
     );
 
     if (nextRows.length === 0) {
       await conn.commit();
+      transactionStarted = false;
       conn.release();
       return res.json({ message: `No more waiting patients in ${sessionType} session.`, calledPatient: null });
     }
@@ -213,11 +213,12 @@ const callNextPatient = async (req, res) => {
 
     // Update status to 'Consulting'
     await conn.query(
-      `UPDATE appointment_queues SET status = 'Consulting' WHERE id = ?`,
+      `UPDATE appointment_queues SET status = 'Consulting' WHERE id = ? AND status = 'Waiting'`,
       [nextPatient.id]
     );
 
     await conn.commit();
+    transactionStarted = false;
     conn.release();
 
     res.json({
@@ -225,7 +226,7 @@ const callNextPatient = async (req, res) => {
       calledPatient: nextPatient
     });
   } catch (error) {
-    await conn.rollback();
+    if (transactionStarted) await conn.rollback();
     conn.release();
     console.error('Call next patient error:', error);
     res.status(500).json({ message: 'Server error advancing session queue' });
@@ -237,18 +238,20 @@ const callNextPatient = async (req, res) => {
 // @access  Private (Doctor only)
 const updateQueueStatus = async (req, res) => {
   const queueId = req.params.queueId;
-  const { status } = req.body;
+  const requestedStatus = req.body.status;
   const doctorId = req.user.profileId;
 
+  const status = requestedStatus === 'In Consultation' ? 'Consulting' : requestedStatus;
   const validStatuses = ['Waiting', 'Consulting', 'Completed', 'Cancelled'];
   if (!validStatuses.includes(status)) {
-    return res.status(400).json({ message: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+    return res.status(400).json({ message: 'Invalid status. Must be Waiting, In Consultation, Completed, or Cancelled' });
   }
 
   const conn = await pool.getConnection();
 
   try {
     await conn.beginTransaction();
+    await conn.query('SELECT id FROM doctors WHERE id = ? FOR UPDATE', [doctorId]);
 
     const [queueRows] = await conn.query(
       `SELECT * FROM appointment_queues WHERE id = ? AND doctor_id = ?`,
@@ -262,21 +265,36 @@ const updateQueueStatus = async (req, res) => {
 
     const queueItem = queueRows[0];
 
-    // If changing to Consulting, mark other currently consulting patient in the same session as Completed
-    if (status === 'Consulting') {
-      await conn.query(
-        `UPDATE appointment_queues 
-         SET status = 'Completed' 
-         WHERE doctor_id = ? AND date = ? AND session_type = ? AND status = 'Consulting' AND id != ?`,
-        [doctorId, queueItem.date, queueItem.session_type, queueId]
-      );
+    if (['Completed', 'Cancelled'].includes(queueItem.status) && status !== queueItem.status) {
+      await conn.rollback();
+      conn.release();
+      return res.status(400).json({ message: `A ${queueItem.status.toLowerCase()} token cannot be reopened` });
     }
 
-    // Update queue status
-    await conn.query(
-      `UPDATE appointment_queues SET status = ? WHERE id = ?`,
-      [status, queueId]
-    );
+    // If changing to Consulting, mark other currently consulting patient in the same session as Completed
+    if (status === 'Consulting') {
+      const [otherConsulting] = await conn.query(
+        `SELECT id FROM appointment_queues
+         WHERE doctor_id = ? AND date = ? AND session_type = ? AND status = 'Consulting' AND id != ?
+         LIMIT 1`,
+        [doctorId, queueItem.date, queueItem.session_type, queueId]
+      );
+      if (otherConsulting.length > 0) {
+        await conn.rollback();
+        conn.release();
+        return res.status(409).json({ message: 'Complete the current consultation before calling another patient.' });
+      }
+      await conn.query(
+        `UPDATE appointment_queues SET status = 'Consulting'
+         WHERE id = ? AND status IN ('Waiting', 'Consulting')`,
+        [queueId]
+      );
+    } else {
+      await conn.query(
+        `UPDATE appointment_queues SET status = ? WHERE id = ?`,
+        [status, queueId]
+      );
+    }
 
     // Sync appointment status if Completed or Cancelled
     if (status === 'Completed') {
@@ -288,7 +306,7 @@ const updateQueueStatus = async (req, res) => {
     await conn.commit();
     conn.release();
 
-    res.json({ message: `Queue status updated to ${status}` });
+    res.json({ message: `Queue status updated to ${requestedStatus}` });
   } catch (error) {
     await conn.rollback();
     conn.release();

@@ -82,7 +82,7 @@ const DoctorDashboard = () => {
           </p>
           <div className="pt-2 flex flex-col sm:flex-row gap-3">
             <Link to="/doctor/slots" className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 text-white px-5 py-3 text-sm font-semibold shadow-sm hover:bg-indigo-500 transition-colors">
-              Manage Time Slots <ArrowRight size={16} />
+              Manage Sessions <ArrowRight size={16} />
             </Link>
             <Link to="/doctor/profile" className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 px-5 py-3 text-sm font-semibold hover:border-slate-300 hover:bg-slate-50 transition-colors">
               Update Profile Info
@@ -163,7 +163,7 @@ const DoctorDashboard = () => {
                   <div className="text-xs text-slate-500 pt-1">
                     <span>Date: {formatDisplayDate(app.date)}</span>
                     <span className="mx-2">|</span>
-                    <span>Time: {app.start_time.substring(0, 5)} - {app.end_time.substring(0, 5)}</span>
+                    <span>{app.session_type} session · Token #{app.queue_number || '—'}</span>
                   </div>
                 </div>
 
@@ -182,5 +182,3 @@ const DoctorDashboard = () => {
 };
 
 export default DoctorDashboard;
-
-

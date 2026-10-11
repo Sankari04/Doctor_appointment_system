@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../../context/AuthContext';
-import { Clock, Users, Calendar, Stethoscope, RefreshCw, AlertCircle, CheckCircle2, UserCheck, Play, Sun, Moon } from 'lucide-react';
+import { Clock, Stethoscope, RefreshCw, AlertCircle, CheckCircle2, Play, Sun, Moon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 const formatDisplayDate = (dateInput) => {
@@ -109,7 +109,7 @@ const PatientQueue = () => {
           </div>
 
           {/* Queue Ticket Number Display */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-6 py-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 py-2">
             <div className="p-5 bg-white border border-slate-200 rounded-2xl text-center space-y-1 shadow-sm">
               <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">{activeQueue.session_type} Token #</span>
               <span className="block text-4xl font-black text-violet-600 tracking-tight">{activeQueue.queue_number}</span>
@@ -127,18 +127,12 @@ const PatientQueue = () => {
               <span className="block text-4xl font-black text-amber-600 tracking-tight">{activeQueue.patientsAhead}</span>
             </div>
 
-            <div className="p-5 bg-white border border-slate-200 rounded-2xl text-center space-y-1 shadow-sm">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Est. Wait Time</span>
-              <span className="block text-3xl font-extrabold text-slate-900 pt-1">
-                {activeQueue.estimatedWaitTimeMins > 0 ? `~${activeQueue.estimatedWaitTimeMins} mins` : (activeQueue.queue_status === 'Consulting' ? 'Your Turn!' : '0 mins')}
-              </span>
-            </div>
           </div>
 
           <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center text-xs text-slate-600 gap-2">
             <div className="flex items-center gap-4">
               <span>Date: <strong className="text-slate-900">{formatDisplayDate(activeQueue.date)}</strong></span>
-              <span>Session Time: <strong className="text-slate-900">{activeQueue.start_time?.substring(0, 5)} - {activeQueue.end_time?.substring(0, 5)}</strong></span>
+              <span>Session: <strong className="text-slate-900">{activeQueue.session_type}</strong></span>
             </div>
             <span className="text-violet-600 italic">Queue updates live automatically every 10s</span>
           </div>
@@ -170,7 +164,7 @@ const PatientQueue = () => {
                     <th className="p-4">Session Token</th>
                     <th className="p-4">Session</th>
                     <th className="p-4">Doctor</th>
-                    <th className="p-4">Date & Time</th>
+                    <th className="p-4">Date & Session</th>
                     <th className="p-4">Status</th>
                   </tr>
                 </thead>
@@ -190,7 +184,7 @@ const PatientQueue = () => {
                       </td>
                       <td className="p-4 text-slate-600">
                         <div>{formatDisplayDate(item.date)}</div>
-                        <div className="text-xs text-slate-400">{item.start_time?.substring(0, 5)} - {item.end_time?.substring(0, 5)}</div>
+                        <div className="text-xs text-slate-400">{item.session_type} session</div>
                       </td>
                       <td className="p-4">{getStatusBadge(item.queue_status)}</td>
                     </tr>
